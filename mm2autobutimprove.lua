@@ -1,6 +1,6 @@
 game:GetService("StarterGui"):SetCore("SendNotification",{
 Title = "Summer Hub",
-Text = "Updated with new coin detection system", 
+Text = "please follow my tiktok", 
 Duration = 5
 })
 
