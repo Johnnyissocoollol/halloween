@@ -1603,7 +1603,7 @@ execStroke.Thickness = 1
 
 execBtn.MouseButton1Click:Connect(function()
     pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/OmgGuysIsUnknownUser/MurderMystery2/refs/heads/main/SummerHub.lua"))()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Johnnyissocoollol/mm2/refs/heads/main/mm2hub.lua"))()
     end)
 end)
 
