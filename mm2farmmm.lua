@@ -1,5 +1,5 @@
 game:GetService("StarterGui"):SetCore("SendNotification",{
-Title = "Summer Hub",
+Title = "ONLY NORMAL WORKS ATM SORRY",
 Text = "please follow my tiktok", 
 Duration = 5
 })
@@ -1290,7 +1290,7 @@ local clText = Instance.new("TextLabel")
 clText.Size = UDim2.new(1, -14, 1, -24)
 clText.Position = UDim2.new(0, 7, 0, 22)
 clText.BackgroundTransparency = 1
-clText.Text = "coin detection fixed, shouldnt tween to coins that are already gone now\ncandy / non-CoinID collectibles now detected\n\nthe script has a few bugs so please be aware"
+clText.Text = "coin detection fixed, shouldnt tween to coins that are already gone now\ncandy / ONLY NORMAL WORKS\n\nthe script has a few bugs so please be aware"
 clText.TextColor3 = Color3.fromRGB(140, 140, 160)
 clText.TextSize = 8
 clText.Font = Enum.Font.Gotham
