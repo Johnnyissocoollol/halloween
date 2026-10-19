@@ -1,5 +1,5 @@
 local function daddy()
-    loadstring(game:HttpGet('https://raw.githubusercontent.com/Johnnyissocoollol/halloween/refs/heads/main/mm2farmmm.lua'))()
+    loadstring(game:HttpGet('https://raw.githubusercontent.com/Johnnyissocoollol/halloween/refs/heads/main/mm2farmfixedhalloween.lua'))()
 end
 
 local function omg()
