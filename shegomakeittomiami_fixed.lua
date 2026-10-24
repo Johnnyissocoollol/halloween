@@ -10,7 +10,15 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local localplayer = Players.LocalPlayer
+
+-- ===== Config =====
+-- To keep the script running after a server hop, paste the raw URL you load this
+-- script from here. Leave "" if your executor auto-executes on join instead.
+local SCRIPT_URL = ""
+local SERVER_HOP_INTERVAL = 3 * 60 * 60 -- 3 hours, in seconds
 
 local tweenSpeed = 15
 local layUndergroundOffset = 3.7
@@ -33,6 +41,9 @@ local autoShootMurderEnabled = false
 local killAllEnabled = false
 local flingLoopActive = false
 local shootLoopActive = false
+local serverHopEnabled = false
+local hopStartTime = tick()
+local hopping = false
 local roundHadCoins = false -- true only once coins were actually seen this round
 
 -- Underground (Valentine-style) state
@@ -542,26 +553,36 @@ local function isCoinNearMurderer(coinPos)
     return (murderHRP.Position - coinPos).Magnitude < MURDERER_DANGER_RADIUS
 end
 
+-- Randomized coin picking so two people running the script don't chase the
+-- same coin. Picks randomly among the closest few coins instead of always #1.
+local RANDOM_COIN_POOL = 4
+math.randomseed(os.clock() * 1000 + (localplayer.UserId % 100000))
+
+local function pickRandomNearCoin(candidates)
+    if #candidates == 0 then return nil end
+    table.sort(candidates, function(a, b) return a.dist < b.dist end)
+    local n = math.min(RANDOM_COIN_POOL, #candidates)
+    return candidates[math.random(1, n)].coin
+end
+
 local function findNearestCoin(hrp)
     if not hrp then return nil end
     local container = getCoinContainer()
     if not container then return nil end
-    local nearest = nil
-    local bestDist = math.huge
+    local candidates = {}
     for _, child in pairs(container:GetChildren()) do
         if isCoinCollectable(child) then
             if not visitedCoins[child] then
                 if not isCoinNearMurderer(child.Position) then
-                    local dist = (hrp.Position - child.Position).Magnitude
-                    if dist < bestDist then
-                        bestDist = dist
-                        nearest = child
-                    end
+                    candidates[#candidates + 1] = {
+                        coin = child,
+                        dist = (hrp.Position - child.Position).Magnitude,
+                    }
                 end
             end
         end
     end
-    return nearest
+    return pickRandomNearCoin(candidates)
 end
 
 local function isRoundActive()
@@ -757,7 +778,7 @@ local function valFindCoin()
     if not root then return end
     local container = getCoinContainer()
     if not container then return end
-    local best, bestDist
+    local candidates = {}
     for _, child in pairs(container:GetChildren()) do
         -- Removed CoinID requirement; accept candy and other collectibles
         if child:IsA("BasePart") and not child:GetAttribute("Collected") then
@@ -771,15 +792,15 @@ local function valFindCoin()
                     visible = visual:IsA("BasePart") and visual.Transparency == 0
                 end
                 if visible then
-                    local d = (root.Position - child.Position).Magnitude
-                    if not bestDist or d < bestDist then
-                        best, bestDist = child, d
-                    end
+                    candidates[#candidates + 1] = {
+                        coin = child,
+                        dist = (root.Position - child.Position).Magnitude,
+                    }
                 end
             end
         end
     end
-    return best
+    return pickRandomNearCoin(candidates)
 end
 
 local function valStopFarm()
@@ -848,8 +869,15 @@ local function valStartFarm()
                             TweenInfo.new(dist / tweenSpeed, Enum.EasingStyle.Linear),
                             { CFrame = cf }
                         )
+                        -- Cancel the trip if the coin gets taken/hidden mid-travel
+                        local watch = RunService.Heartbeat:Connect(function()
+                            if not isCoinCollectable(coin) then
+                                pcall(function() tween:Cancel() end)
+                            end
+                        end)
                         tween:Play()
                         tween.Completed:Wait()
+                        watch:Disconnect()
                     end
 
                     local touchStart = tick()
@@ -910,7 +938,7 @@ local function layFindCoin()
     if not root then return end
     local container = getCoinContainer()
     if not container then return end
-    local best, bestDist
+    local candidates = {}
     for _, child in pairs(container:GetChildren()) do
         -- Removed CoinID requirement
         if child:IsA("BasePart") and not child:GetAttribute("Collected") then
@@ -924,15 +952,15 @@ local function layFindCoin()
                     visible = visual:IsA("BasePart") and visual.Transparency == 0
                 end
                 if visible then
-                    local d = (root.Position - child.Position).Magnitude
-                    if not bestDist or d < bestDist then
-                        best, bestDist = child, d
-                    end
+                    candidates[#candidates + 1] = {
+                        coin = child,
+                        dist = (root.Position - child.Position).Magnitude,
+                    }
                 end
             end
         end
     end
-    return best
+    return pickRandomNearCoin(candidates)
 end
 
 local function layStopFarm()
@@ -1010,8 +1038,16 @@ local function layStartFarm()
                             TweenInfo.new(math.max(dist / tweenSpeed, 0.05), Enum.EasingStyle.Linear),
                             { CFrame = target }
                         )
-                        layTween:Play()
-                        layTween.Completed:Wait()
+                        -- Cancel the trip if the coin gets taken/hidden mid-travel
+                        local thisTween = layTween
+                        local watch = RunService.Heartbeat:Connect(function()
+                            if not isCoinCollectable(coin) then
+                                pcall(function() thisTween:Cancel() end)
+                            end
+                        end)
+                        thisTween:Play()
+                        thisTween.Completed:Wait()
+                        watch:Disconnect()
                         layTween = nil
                     end
 
@@ -1329,7 +1365,7 @@ local clText = Instance.new("TextLabel")
 clText.Size = UDim2.new(1, -14, 1, -24)
 clText.Position = UDim2.new(0, 7, 0, 22)
 clText.BackgroundTransparency = 1
-clText.Text = "coin detection fixed, shouldnt tween to coins that are already gone now\nyes fixed errors /\nunderground + fixed for halloween\n\nthe script has a few bugs so please be aware"
+clText.Text = "coin detection fixed, shouldnt tween to coins that are already gone now\nyes im aware of a issue where it will fling murder at the start of the round/\nunderground + fixed for halloween\n\nthe script has a few bugs so please be aware"
 clText.TextColor3 = Color3.fromRGB(140, 140, 160)
 clText.TextSize = 8
 clText.Font = Enum.Font.Gotham
@@ -1516,11 +1552,12 @@ local lobbyTrack, lobbyKnob = makeToggle(farmPage, "Return to Lobby", 10)
 makeDivider(farmPage, 11)
 makeSection(farmPage, "SETTINGS", 12)
 local avoidTrack, avoidKnob = makeToggle(farmPage, "Avoid Murderer Coins", 13)
+local hopTrack, hopKnob = makeToggle(farmPage, "Server Hop Every 3 Hours", 14)
 
 local speedWrap = Instance.new("Frame")
 speedWrap.Size = UDim2.new(1, 0, 0, 60)
 speedWrap.BackgroundTransparency = 1
-speedWrap.LayoutOrder = 14
+speedWrap.LayoutOrder = 15
 speedWrap.Parent = farmPage
 
 local speedLbl = Instance.new("TextLabel", speedWrap)
@@ -1679,11 +1716,110 @@ avoidTrack.MouseButton1Click:Connect(function()
     setToggle(avoidTrack, avoidKnob, avoidMurderCoins)
 end)
 
+-- ============================================================
+-- Server hop (every 3 hours)
+-- ============================================================
+local function findNewServer()
+    local ok, result = pcall(function()
+        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId ..
+            "/servers/Public?sortOrder=Asc&limit=100"
+        return HttpService:JSONDecode(game:HttpGet(url))
+    end)
+    if not ok or type(result) ~= "table" or type(result.data) ~= "table" then return nil end
+    local choices = {}
+    for _, srv in ipairs(result.data) do
+        if srv.id ~= game.JobId and srv.playing and srv.maxPlayers
+           and srv.playing < srv.maxPlayers - 1 and srv.playing >= 1 then
+            choices[#choices + 1] = srv.id
+        end
+    end
+    if #choices == 0 then return nil end
+    return choices[math.random(1, #choices)]
+end
+
+local function doServerHop()
+    if hopping then return end
+    hopping = true
+    if SCRIPT_URL ~= "" then
+        local q = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+        if q then
+            pcall(q, 'loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))()')
+        end
+    end
+    pcall(function() game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Summer Hub", Text = "Server hopping...", Duration = 3 }) end)
+    local serverId = findNewServer()
+    if serverId then
+        pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, serverId, localplayer) end)
+    else
+        pcall(function() TeleportService:Teleport(game.PlaceId, localplayer) end)
+    end
+    -- If the teleport fails, allow another attempt shortly
+    task.delay(15, function() hopping = false end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        if serverHopEnabled and not hopping and tick() - hopStartTime >= SERVER_HOP_INTERVAL then
+            -- Prefer hopping between rounds: wait up to 2 min for a quiet moment
+            local waitUntil = tick() + 120
+            while serverHopEnabled and tick() < waitUntil and isRoundActive() and not deadUntilNextRound do
+                task.wait(1)
+            end
+            if serverHopEnabled then
+                hopStartTime = tick()
+                doServerHop()
+            end
+        end
+    end
+end)
+
+hopTrack.MouseButton1Click:Connect(function()
+    serverHopEnabled = not serverHopEnabled
+    setToggle(hopTrack, hopKnob, serverHopEnabled)
+    if serverHopEnabled then hopStartTime = tick() end
+end)
+
+-- On-screen countdown to the next server hop (always visible, even when the menu is closed)
+local hopTimerLbl = Instance.new("TextLabel")
+hopTimerLbl.Name = "HopTimer"
+hopTimerLbl.Size = UDim2.new(0, 170, 0, 20)
+hopTimerLbl.Position = UDim2.new(0.5, -85, 0, 34)
+hopTimerLbl.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+hopTimerLbl.BackgroundTransparency = 0.2
+hopTimerLbl.BorderSizePixel = 0
+hopTimerLbl.TextColor3 = Color3.fromRGB(200, 200, 220)
+hopTimerLbl.TextSize = 10
+hopTimerLbl.Font = Enum.Font.GothamMedium
+hopTimerLbl.Text = "Server hop in --:--:--"
+hopTimerLbl.ZIndex = 49
+hopTimerLbl.Parent = sg
+Instance.new("UICorner", hopTimerLbl).CornerRadius = UDim.new(0, 6)
+local hopTimerStroke = Instance.new("UIStroke", hopTimerLbl)
+hopTimerStroke.Color = Color3.fromRGB(45, 45, 55)
+hopTimerStroke.Thickness = 1
+
+task.spawn(function()
+    while hopTimerLbl.Parent do
+        if hopping then
+            hopTimerLbl.Text = "Server hopping..."
+        elseif serverHopEnabled then
+            local remaining = math.max(0, math.floor(SERVER_HOP_INTERVAL - (tick() - hopStartTime)))
+            hopTimerLbl.Text = string.format("Server hop in %d:%02d:%02d",
+                math.floor(remaining / 3600), math.floor((remaining % 3600) / 60), remaining % 60)
+        else
+            hopTimerLbl.Text = "Server hop: off"
+        end
+        task.wait(1)
+    end
+end)
+
 -- Execute Full Summer Hub button
 local execWrap = Instance.new("Frame")
 execWrap.Size = UDim2.new(1, 0, 0, 34)
 execWrap.BackgroundTransparency = 1
-execWrap.LayoutOrder = 15
+execWrap.LayoutOrder = 16
 execWrap.Parent = farmPage
 
 local execBtn = Instance.new("TextButton")
@@ -1718,7 +1854,7 @@ creditLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
 creditLbl.TextSize = 9
 creditLbl.Font = Enum.Font.Gotham
 creditLbl.TextXAlignment = Enum.TextXAlignment.Center
-creditLbl.LayoutOrder = 16
+creditLbl.LayoutOrder = 17
 creditLbl.Parent = farmPage
 
 local minimized = false
@@ -1848,3 +1984,25 @@ UserInputService.InputBegan:Connect(function(inp)
     end
     if modeDrop.Visible and out(modeDrop) and out(modeBtn) then modeDrop.Visible = false end
 end)
+
+-- ============================================================
+-- Defaults on execute: Lay mode, Auto Reset, Server Hop, Auto Farm all ON
+-- ============================================================
+autoResetEnabled = true
+setToggle(resetTrack, resetKnob, true)
+
+farmMode = "Lay"
+modeBtn.Text = "Lay"
+
+serverHopEnabled = true
+hopStartTime = tick()
+setToggle(hopTrack, hopKnob, true)
+
+autoFarm = true
+setToggle(farmTrack, farmKnob, true)
+deadUntilNextRound = false
+roundHadCoins = false
+visitedCoins = {}
+valFirstCoin = true
+layFirstCoin = true
+startFarmLoop()
